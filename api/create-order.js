@@ -1,26 +1,35 @@
 // api/create-order.js
 export default async function handler(req, res) {
-  // Configuration CORS pour SummerForever
+  // Configuration CORS - AUTORISE VOTRE DOMAINE
   const allowedOrigins = [
     'https://summerforever.us',
     'https://www.summerforever.us',
-    'https://summerforever.com',
-    'https://www.summerforever.com',
-    'http://localhost:3000'
+    'http://localhost:3000',
+    'http://localhost:3001'
   ];
   
   const origin = req.headers.origin;
+  
+  // Vérifier si l'origine est autorisée
   if (allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
+  } else {
+    // En développement, autoriser toute origine (optionnel)
+    res.setHeader('Access-Control-Allow-Origin', '*');
   }
   
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  // En-têtes CORS nécessaires
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Max-Age', '86400'); // 24 heures
   
+  // Gérer la requête OPTIONS (preflight)
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
   
+  // Vérifier que c'est une requête POST
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -29,8 +38,17 @@ export default async function handler(req, res) {
     const { cart, customerInfo } = req.body;
     
     console.log('📦 SummerForever - Nouvelle commande');
-    console.log('Client:', customerInfo.fullName);
-    console.log('Articles:', cart.length);
+    console.log('Client:', customerInfo?.fullName);
+    console.log('Articles:', cart?.length || 0);
+    
+    // Validation des données
+    if (!cart || !cart.length) {
+      return res.status(400).json({ error: 'Cart is empty' });
+    }
+    
+    if (!customerInfo || !customerInfo.fullName || !customerInfo.phone) {
+      return res.status(400).json({ error: 'Customer information missing' });
+    }
     
     // Transformer le panier au format Shopify
     const line_items = cart.map(item => ({
@@ -49,14 +67,14 @@ export default async function handler(req, res) {
       draft_order: {
         line_items: line_items,
         customer: {
-          first_name: customerInfo.firstName,
-          last_name: customerInfo.lastName,
+          first_name: customerInfo.firstName || customerInfo.fullName.split(' ')[0],
+          last_name: customerInfo.lastName || customerInfo.fullName.split(' ').slice(1).join(' ') || '',
           email: `${customerInfo.phone.replace(/\D/g, '')}@summerforever.com`,
           phone: customerInfo.phone
         },
         shipping_address: {
-          first_name: customerInfo.firstName,
-          last_name: customerInfo.lastName,
+          first_name: customerInfo.firstName || customerInfo.fullName.split(' ')[0],
+          last_name: customerInfo.lastName || customerInfo.fullName.split(' ').slice(1).join(' ') || '',
           address1: customerInfo.address,
           city: customerInfo.city,
           country: 'MA',
@@ -76,12 +94,19 @@ Total: ${total} MAD`,
       }
     };
     
+    // Vérifier que le token existe
+    const token = process.env.SHOPIFY_ACCESS_TOKEN;
+    if (!token) {
+      console.error('❌ SHOPIFY_ACCESS_TOKEN manquant!');
+      return res.status(500).json({ error: 'Configuration error: Missing Shopify token' });
+    }
+    
     // Appel à l'API Shopify
     const response = await fetch(`https://tufjs6-cx.myshopify.com/admin/api/2024-01/draft_orders.json`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
+        'X-Shopify-Access-Token': token
       },
       body: JSON.stringify(draftOrderData)
     });
@@ -100,7 +125,7 @@ Total: ${total} MAD`,
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
-        'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
+        'X-Shopify-Access-Token': token
       },
       body: JSON.stringify({ payment_pending: true })
     });
@@ -121,7 +146,7 @@ Total: ${total} MAD`,
     });
     
   } catch (error) {
-    console.error('❌ Erreur API:', error);
+    console.error('❌ Erreur API:', error.message);
     res.status(500).json({
       success: false,
       error: error.message
