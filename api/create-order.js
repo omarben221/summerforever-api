@@ -1,30 +1,23 @@
 // api/create-order.js
 export default async function handler(req, res) {
-  // Configuration CORS - AUTORISE VOTRE DOMAINE
-  const allowedOrigins = [
-    'https://summerforever.us',
-    'https://www.summerforever.us',
-    'http://localhost:3000',
-    'http://localhost:3001'
-  ];
-  
+  // Configuration CORS - Version TRÈS permissive pour résoudre le problème
   const origin = req.headers.origin;
   
-  // Vérifier si l'origine est autorisée
-  if (allowedOrigins.includes(origin)) {
+  // Autoriser spécifiquement summerforever.us
+  if (origin === 'https://summerforever.us' || origin === 'https://www.summerforever.us') {
     res.setHeader('Access-Control-Allow-Origin', origin);
   } else {
-    // En développement, autoriser toute origine (optionnel)
+    // Pour les tests, autoriser toutes les origines
     res.setHeader('Access-Control-Allow-Origin', '*');
   }
   
-  // En-têtes CORS nécessaires
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  // En-têtes CORS essentiels
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Max-Age', '86400'); // 24 heures
+  res.setHeader('Access-Control-Max-Age', '86400');
   
-  // Gérer la requête OPTIONS (preflight)
+  // IMPORTANT: Répondre immédiatement aux requêtes OPTIONS (preflight)
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
@@ -37,20 +30,23 @@ export default async function handler(req, res) {
   try {
     const { cart, customerInfo } = req.body;
     
-    console.log('📦 SummerForever - Nouvelle commande');
-    console.log('Client:', customerInfo?.fullName);
-    console.log('Articles:', cart?.length || 0);
+    console.log('📦 Commande reçue');
+    console.log('Cart:', cart?.length);
+    console.log('Customer:', customerInfo?.fullName);
     
-    // Validation des données
-    if (!cart || !cart.length) {
+    // Validation
+    if (!cart || cart.length === 0) {
       return res.status(400).json({ error: 'Cart is empty' });
     }
     
-    if (!customerInfo || !customerInfo.fullName || !customerInfo.phone) {
-      return res.status(400).json({ error: 'Customer information missing' });
+    // Vérifier le token Shopify
+    const token = process.env.SHOPIFY_ACCESS_TOKEN;
+    if (!token) {
+      console.error('❌ Token Shopify manquant!');
+      return res.status(500).json({ error: 'Configuration error: Missing SHOPIFY_ACCESS_TOKEN' });
     }
     
-    // Transformer le panier au format Shopify
+    // Transformer le panier
     const line_items = cart.map(item => ({
       title: `${item.name} - Taille: ${item.size}`,
       price: parseFloat(item.price.replace('MAD ', '')),
@@ -59,22 +55,23 @@ export default async function handler(req, res) {
       taxable: false
     }));
     
-    // Calculer le total
     const total = line_items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    const firstName = customerInfo.firstName || customerInfo.fullName.split(' ')[0];
+    const lastName = customerInfo.lastName || customerInfo.fullName.split(' ').slice(1).join(' ') || '';
     
-    // Préparer les données pour Shopify
+    // Créer la commande Shopify
     const draftOrderData = {
       draft_order: {
         line_items: line_items,
         customer: {
-          first_name: customerInfo.firstName || customerInfo.fullName.split(' ')[0],
-          last_name: customerInfo.lastName || customerInfo.fullName.split(' ').slice(1).join(' ') || '',
+          first_name: firstName,
+          last_name: lastName,
           email: `${customerInfo.phone.replace(/\D/g, '')}@summerforever.com`,
           phone: customerInfo.phone
         },
         shipping_address: {
-          first_name: customerInfo.firstName || customerInfo.fullName.split(' ')[0],
-          last_name: customerInfo.lastName || customerInfo.fullName.split(' ').slice(1).join(' ') || '',
+          first_name: firstName,
+          last_name: lastName,
           address1: customerInfo.address,
           city: customerInfo.city,
           country: 'MA',
@@ -86,22 +83,14 @@ Téléphone: ${customerInfo.phone}
 Adresse: ${customerInfo.address}, ${customerInfo.city}
 
 Produits:
-${cart.map(item => `- ${item.name} (Taille: ${item.size}) x${item.quantity} = ${item.price}`).join('\n')}
+${cart.map(item => `- ${item.name} (${item.size}) x${item.quantity} = ${item.price}`).join('\n')}
 
 Total: ${total} MAD`,
-        tags: 'summerforever-site, custom-order',
+        tags: 'summerforever-site',
         tax_exempt: true
       }
     };
     
-    // Vérifier que le token existe
-    const token = process.env.SHOPIFY_ACCESS_TOKEN;
-    if (!token) {
-      console.error('❌ SHOPIFY_ACCESS_TOKEN manquant!');
-      return res.status(500).json({ error: 'Configuration error: Missing Shopify token' });
-    }
-    
-    // Appel à l'API Shopify
     const response = await fetch(`https://tufjs6-cx.myshopify.com/admin/api/2024-01/draft_orders.json`, {
       method: 'POST',
       headers: {
@@ -114,8 +103,7 @@ Total: ${total} MAD`,
     const data = await response.json();
     
     if (!response.ok) {
-      console.error('Erreur Shopify:', data);
-      throw new Error(data.errors || 'Erreur création commande Shopify');
+      throw new Error(data.errors || 'Erreur Shopify');
     }
     
     const draftOrderId = data.draft_order.id;
@@ -132,21 +120,17 @@ Total: ${total} MAD`,
     
     const completeData = await completeResponse.json();
     
-    if (!completeResponse.ok) {
-      throw new Error('Erreur finalisation commande');
-    }
-    
-    console.log('✅ Commande créée avec succès! ID:', draftOrderId);
+    console.log('✅ Commande créée!');
     
     res.status(200).json({
       success: true,
       orderId: draftOrderId,
-      orderNumber: completeData.draft_order.order_number || draftOrderId,
-      message: 'Commande créée avec succès'
+      orderNumber: completeData.draft_order?.order_number || draftOrderId,
+      message: 'Commande créée'
     });
     
   } catch (error) {
-    console.error('❌ Erreur API:', error.message);
+    console.error('❌ Erreur:', error.message);
     res.status(500).json({
       success: false,
       error: error.message
