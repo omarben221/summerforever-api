@@ -1,0 +1,6 @@
+{
+  "name": "summerforever-api",
+  "version": "1.0.0",
+  "description": "API pour les commandes SummerForever Shopify",
+  "type": "module"
+}
