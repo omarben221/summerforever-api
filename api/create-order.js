@@ -1,28 +1,15 @@
-// api/create-order.js
 export default async function handler(req, res) {
-  // Configuration CORS - Version TRÈS permissive pour résoudre le problème
-  const origin = req.headers.origin;
-  
-  // Autoriser spécifiquement summerforever.us
-  if (origin === 'https://summerforever.us' || origin === 'https://www.summerforever.us') {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-  } else {
-    // Pour les tests, autoriser toutes les origines
-    res.setHeader('Access-Control-Allow-Origin', '*');
-  }
-  
-  // En-têtes CORS essentiels
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  // Configuration CORS
+  res.setHeader('Access-Control-Allow-Origin', 'https://summerforever.us');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Max-Age', '86400');
   
-  // IMPORTANT: Répondre immédiatement aux requêtes OPTIONS (preflight)
+  // Gestion preflight
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
   
-  // Vérifier que c'est une requête POST
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -30,23 +17,15 @@ export default async function handler(req, res) {
   try {
     const { cart, customerInfo } = req.body;
     
-    console.log('📦 Commande reçue');
-    console.log('Cart:', cart?.length);
-    console.log('Customer:', customerInfo?.fullName);
+    const token = process.env.SHOPIFY_ACCESS_TOKEN;
+    if (!token) {
+      return res.status(500).json({ error: 'Missing Shopify token' });
+    }
     
-    // Validation
     if (!cart || cart.length === 0) {
       return res.status(400).json({ error: 'Cart is empty' });
     }
     
-    // Vérifier le token Shopify
-    const token = process.env.SHOPIFY_ACCESS_TOKEN;
-    if (!token) {
-      console.error('❌ Token Shopify manquant!');
-      return res.status(500).json({ error: 'Configuration error: Missing SHOPIFY_ACCESS_TOKEN' });
-    }
-    
-    // Transformer le panier
     const line_items = cart.map(item => ({
       title: `${item.name} - Taille: ${item.size}`,
       price: parseFloat(item.price.replace('MAD ', '')),
@@ -55,11 +34,9 @@ export default async function handler(req, res) {
       taxable: false
     }));
     
-    const total = line_items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
     const firstName = customerInfo.firstName || customerInfo.fullName.split(' ')[0];
     const lastName = customerInfo.lastName || customerInfo.fullName.split(' ').slice(1).join(' ') || '';
     
-    // Créer la commande Shopify
     const draftOrderData = {
       draft_order: {
         line_items: line_items,
@@ -77,16 +54,6 @@ export default async function handler(req, res) {
           country: 'MA',
           phone: customerInfo.phone
         },
-        note: `Commande SummerForever
-Client: ${customerInfo.fullName}
-Téléphone: ${customerInfo.phone}
-Adresse: ${customerInfo.address}, ${customerInfo.city}
-
-Produits:
-${cart.map(item => `- ${item.name} (${item.size}) x${item.quantity} = ${item.price}`).join('\n')}
-
-Total: ${total} MAD`,
-        tags: 'summerforever-site',
         tax_exempt: true
       }
     };
@@ -109,7 +76,7 @@ Total: ${total} MAD`,
     const draftOrderId = data.draft_order.id;
     
     // Compléter la commande
-    const completeResponse = await fetch(`https://tufjs6-cx.myshopify.com/admin/api/2024-01/draft_orders/${draftOrderId}/complete.json`, {
+    await fetch(`https://tufjs6-cx.myshopify.com/admin/api/2024-01/draft_orders/${draftOrderId}/complete.json`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -118,22 +85,14 @@ Total: ${total} MAD`,
       body: JSON.stringify({ payment_pending: true })
     });
     
-    const completeData = await completeResponse.json();
-    
-    console.log('✅ Commande créée!');
-    
-    res.status(200).json({
-      success: true,
+    res.status(200).json({ 
+      success: true, 
       orderId: draftOrderId,
-      orderNumber: completeData.draft_order?.order_number || draftOrderId,
-      message: 'Commande créée'
+      orderNumber: data.draft_order.order_number
     });
     
   } catch (error) {
-    console.error('❌ Erreur:', error.message);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    console.error('Error:', error.message);
+    res.status(500).json({ success: false, error: error.message });
   }
 }
