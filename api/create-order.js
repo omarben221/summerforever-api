@@ -1,3 +1,39 @@
+// api/create-order.js
+let cachedToken = null;
+let tokenExpiry = null;
+
+async function getShopifyToken() {
+  // Vérifier si le token est encore valide (24h)
+  if (cachedToken && tokenExpiry && Date.now() < tokenExpiry) {
+    return cachedToken;
+  }
+  
+  console.log('🔄 Génération d\'un nouveau token Shopify...');
+  
+  const response = await fetch(`https://${process.env.SHOPIFY_STORE}/admin/oauth/access_token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_id: process.env.SHOPIFY_CLIENT_ID,
+      client_secret: process.env.SHOPIFY_CLIENT_SECRET,
+      grant_type: 'client_credentials'
+    })
+  });
+  
+  const data = await response.json();
+  
+  if (!response.ok) {
+    throw new Error(data.error || 'Erreur génération token');
+  }
+  
+  // Stocker le token (expire dans 24h)
+  cachedToken = data.access_token;
+  tokenExpiry = Date.now() + (24 * 60 * 60 * 1000);
+  
+  console.log('✅ Token Shopify obtenu, expire dans 24h');
+  return cachedToken;
+}
+
 export default async function handler(req, res) {
   // Configuration CORS
   res.setHeader('Access-Control-Allow-Origin', 'https://summerforever.us');
@@ -5,7 +41,6 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   
-  // Gestion preflight
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
@@ -17,14 +52,12 @@ export default async function handler(req, res) {
   try {
     const { cart, customerInfo } = req.body;
     
-    const token = process.env.SHOPIFY_ACCESS_TOKEN;
-    if (!token) {
-      return res.status(500).json({ error: 'Missing Shopify token' });
-    }
-    
     if (!cart || cart.length === 0) {
       return res.status(400).json({ error: 'Cart is empty' });
     }
+    
+    // Obtenir un token valide (auto-généré si expiré)
+    const token = await getShopifyToken();
     
     const line_items = cart.map(item => ({
       title: `${item.name} - Taille: ${item.size}`,
@@ -58,7 +91,7 @@ export default async function handler(req, res) {
       }
     };
     
-    const response = await fetch(`https://tufjs6-cx.myshopify.com/admin/api/2024-01/draft_orders.json`, {
+    const response = await fetch(`https://${process.env.SHOPIFY_STORE}/admin/api/2024-01/draft_orders.json`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -75,8 +108,7 @@ export default async function handler(req, res) {
     
     const draftOrderId = data.draft_order.id;
     
-    // Compléter la commande
-    await fetch(`https://tufjs6-cx.myshopify.com/admin/api/2024-01/draft_orders/${draftOrderId}/complete.json`, {
+    await fetch(`https://${process.env.SHOPIFY_STORE}/admin/api/2024-01/draft_orders/${draftOrderId}/complete.json`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -92,7 +124,7 @@ export default async function handler(req, res) {
     });
     
   } catch (error) {
-    console.error('Error:', error.message);
+    console.error('❌ Erreur:', error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 }
